@@ -51,16 +51,21 @@ function acn_where_file () { acn_where_text "$SGD_HEAD$1"; }
 function acn_where_text () {
   local WHAT="$1"
   [ -n "$WHAT" ] || return 6$(echo "E: no search string given" >&2)
-  local OFFS="$(grep -aboFe "$WHAT" -- "${CFG[orig]}" | cut -d : -sf 1)"
+  local WLEN="${#WHAT}"
+  local NULB="${CFG[nullbytes]}"
+  local OFFS="$(<"${CFG[orig]}" tr '\000' "$NULB" \
+    | grep -aboFe "$WHAT" | cut -d : -sf 1)"
+  printf -v WHAT %q "${WHAT//$NULB/$'\x00'}"
+  WHAT+=" ($WLEN bytes)"
   case "$OFFS" in
     *'\n'* )
-      echo "E: found too many instances of '$WHAT': ${OFFS//$'\n'/ }" >&2
+      echo "E: found too many instances of $WHAT: ${OFFS//$'\n'/ }" >&2
       return 4;;
     [0-9]* )
       echo "$OFFS"
       return 0;;
   esac
-  echo "E: cannot find '$WHAT'" >&2
+  echo "E: cannot find $WHAT." >&2
   return 3
 }
 
@@ -75,7 +80,6 @@ function acn_extract () {
     count="${CFG[bufsz]}" | tr '\000' "$NULB"
     echo :)"
   BUF="${BUF%:}"
-  local NUL_BYTE=$'\x00'
   local TRIMMED="${BUF%%"$NULB"[^"$NULB"]*}"
   if [ -n "$TRIMMED" ]; then
     BUF="$TRIMMED$NULB"
@@ -90,6 +94,11 @@ function acn_patch () {
   local PATCH="$1"
   [ "$PATCH" == - ] || exec <"$PATCH" || return 3$(
     echo "E: failed to read $PATCH" >&2)
+
+  local NULB="${CFG[nullbytes]}"
+  exec < <(tr '\000' "$NULB"
+    # because bash's read drops NULs and also we can't pass NULs as arg
+    )
   local INTRO=
   IFS= read -r INTRO
   local OFFS="$(acn_where_text "$INTRO")"
@@ -98,7 +107,7 @@ function acn_patch () {
   # use cat to ensure stdin is not seekable, to avoid re-reading line 1.
   echo -n "D: gonna write patch '$PATCH' into '${CFG[dest]}' at offset $OFFS"
   printf ' (0x%0X): ' "$OFFS"
-  cat | dd bs=1 seek="$OFFS" of="${CFG[dest]}" \
+  tr "$NULB" '\000' | dd bs=1 seek="$OFFS" of="${CFG[dest]}" \
     status=none conv=notrunc || return $?
   echo 'done.'
 }
